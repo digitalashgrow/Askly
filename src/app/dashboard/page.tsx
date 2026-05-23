@@ -37,6 +37,9 @@ export default function DashboardPage() {
 
   // Fetch profile and messages
   useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
     async function loadDashboardData() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
@@ -45,7 +48,7 @@ export default function DashboardPage() {
           return;
         }
 
-        // 1. Fetch User profile profile
+        // 1. Fetch User profile
         const { data: userProfile, error: profileErr } = await supabase
           .from('users')
           .select('*')
@@ -53,7 +56,7 @@ export default function DashboardPage() {
           .maybeSingle();
 
         if (profileErr) throw profileErr;
-        setProfile(userProfile);
+        if (!cancelled) setProfile(userProfile);
 
         // 2. Fetch Messages
         const { data: userMessages, error: msgErr } = await supabase
@@ -64,11 +67,11 @@ export default function DashboardPage() {
           .order('created_at', { ascending: false });
 
         if (msgErr) throw msgErr;
-        setMessages(userMessages || []);
+        if (!cancelled) setMessages(userMessages || []);
 
-        // 3. Set up Real-time messages listener
-        const channel = supabase
-          .channel('realtime-dashboard-messages')
+        // 3. Set up Real-time messages listener with unique channel name
+        channel = supabase
+          .channel(`realtime-db-${user.id}-${Date.now()}`)
           .on(
             'postgres_changes',
             {
@@ -78,24 +81,27 @@ export default function DashboardPage() {
               filter: `receiver_id=eq.${user.id}`,
             },
             (payload) => {
-              setMessages((prev) => [payload.new, ...prev]);
+              setMessages((prev) => [payload.new as Message, ...prev]);
               toast.info('New secret message received! 🤫');
             }
           )
           .subscribe();
-
-        return () => {
-          supabase.removeChannel(channel);
-        };
       } catch (err) {
         console.error(err);
-        toast.error('Failed to load dashboard.');
+        if (!cancelled) toast.error('Failed to load dashboard.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     loadDashboardData();
+
+    return () => {
+      cancelled = true;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, [supabase, router]);
 
   const handleCopyLink = () => {
